@@ -125,8 +125,15 @@
     const input = document.getElementById('hb-chat-input');
     const messages = document.getElementById('hb-chat-messages');
 
-    const API_URL = 'http://localhost:3001/chat';
+    const API_URL = 'https://shopify-chatbot-api-6kfs.onrender.com/chat';
+    /* 🔥 ADD THIS HERE */
+const SESSION_KEY = 'hb_chat_session_id';
 
+let sessionId = localStorage.getItem(SESSION_KEY);
+if (!sessionId) {
+  sessionId = 'sess_' + Math.random().toString(36).slice(2) + Date.now();
+  localStorage.setItem(SESSION_KEY, sessionId);
+}
     toggleBtn.addEventListener('click', () => {
       chatWindow.style.display =
         chatWindow.style.display === 'none' || chatWindow.style.display === ''
@@ -156,7 +163,7 @@
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ message }),
+          body: JSON.stringify({ message, sessionId }),
         });
 
         const data = await res.json();
