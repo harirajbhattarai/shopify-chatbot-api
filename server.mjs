@@ -122,6 +122,31 @@ app.post('/chat', async (req, res) => {
         sources: [],
         sessionId,
       });
+      app.get('/messages', async (req, res) => {
+  try {
+    const sessionId = req.query.sessionId;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId required' });
+    }
+
+    const { data, error } = await supabase
+      .from('chat_logs')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Fetch messages error:', error);
+      return res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+
+    return res.json({ messages: data });
+  } catch (err) {
+    console.error('Server error:', err);
+    return res.status(500).json({ error: 'Something went wrong' });
+  }
+});
     }
 
     console.log('No takeover found - continuing with AI flow');
