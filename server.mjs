@@ -31,15 +31,53 @@ app.post('/chat', async (req, res) => {
       req.headers['x-session-id'] ||
       'anonymous-session';
 
-    console.log('NEW MESSAGE:', question);
-    console.log('SESSION ID:', sessionId);
-
     if (!question || typeof question !== 'string') {
       return res.status(400).json({ error: 'Message is required' });
     }
 
     const normalizedQuestion = question.trim().toLowerCase();
 
+    // 1. HUMAN TAKEOVER CHECK FIRST
+    const { data: lastHuman, error: lastHumanError } = await supabase
+      .from('chat_logs')
+      .select('sender, created_at')
+      .eq('session_id', sessionId)
+      .eq('sender', 'human')
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (lastHumanError) {
+      console.error('Human takeover check error:', lastHumanError);
+    }
+
+    if (lastHuman && lastHuman.length > 0) {
+      const answer =
+        'A support agent has joined the chat. Please wait for a reply.';
+
+      const { error: logError } = await supabase.from('chat_logs').insert([
+        {
+          session_id: String(sessionId),
+          user_message: question,
+          assistant_message: answer,
+          matched_sources: [],
+          confidence: 1.0,
+          escalated: false,
+          sender: 'bot',
+        },
+      ]);
+
+      if (logError) {
+        console.error('Takeover log insert error:', logError);
+      }
+
+      return res.json({
+        answer,
+        sources: [],
+        sessionId,
+      });
+    }
+
+    // 2. GREETING HANDLING
     const greetingMessages = [
       'hi',
       'hello',
@@ -50,7 +88,6 @@ app.post('/chat', async (req, res) => {
       'good evening',
     ];
 
-    // 1. Greeting handling
     if (greetingMessages.includes(normalizedQuestion)) {
       const answer =
         'Hi! How can I help you today? You can ask about delivery, returns, warranty, or products.';
@@ -78,80 +115,7 @@ app.post('/chat', async (req, res) => {
       });
     }
 
-    // 2. Human takeover check
-    console.log('Checking for human takeover...');
-
-    const { data: lastHuman, error: lastHumanError } = await supabase
-      .from('chat_logs')
-      .select('sender, created_at')
-      .eq('session_id', sessionId)
-      .eq('sender', 'human')
-      .order('created_at', { ascending: false })
-      .limit(1);
-
-    if (lastHumanError) {
-      console.error('Human takeover check error:', lastHumanError);
-    }
-
-    console.log('lastHuman result:', lastHuman);
-
-    if (lastHuman && lastHuman.length > 0) {
-      console.log('TAKEOVER ACTIVE - returning support agent message');
-
-      const answer =
-        'A support agent has joined the chat. Please wait for a reply.';
-
-      const { error: logError } = await supabase.from('chat_logs').insert([
-        {
-          session_id: String(sessionId),
-          user_message: question,
-          assistant_message: answer,
-          matched_sources: [],
-          confidence: 1.0,
-          escalated: false,
-          sender: 'bot',
-        },
-      ]);
-
-      if (logError) {
-        console.error('Takeover log insert error:', logError);
-      }
-
-      return res.json({
-        answer,
-        sources: [],
-        sessionId,
-      });
-      app.get('/messages', async (req, res) => {
-  try {
-    const sessionId = req.query.sessionId;
-
-    if (!sessionId) {
-      return res.status(400).json({ error: 'sessionId required' });
-    }
-
-    const { data, error } = await supabase
-      .from('chat_logs')
-      .select('*')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: true });
-
-    if (error) {
-      console.error('Fetch messages error:', error);
-      return res.status(500).json({ error: 'Failed to fetch messages' });
-    }
-
-    return res.json({ messages: data });
-  } catch (err) {
-    console.error('Server error:', err);
-    return res.status(500).json({ error: 'Something went wrong' });
-  }
-});
-    }
-
-    console.log('No takeover found - continuing with AI flow');
-
-    // 3. Create embedding
+    // 3. CREATE EMBEDDING
     const embeddingRes = await openai.embeddings.create({
       model: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
       input: question,
@@ -159,7 +123,7 @@ app.post('/chat', async (req, res) => {
 
     const queryEmbedding = embeddingRes.data[0].embedding;
 
-    // 4. Search documents
+    // 4. SEARCH DOCUMENTS
     const { data: matches, error: matchError } = await supabase.rpc(
       'match_documents',
       {
@@ -178,7 +142,7 @@ app.post('/chat', async (req, res) => {
     let answer =
       "I'm not sure based on the available store information. Please contact support for help.";
 
-    // 5. Generate AI answer if context found
+    // 5. GENERATE AI ANSWER
     if (safeMatches.length > 0) {
       const context = safeMatches.map((m) => m.content).join('\n\n');
 
@@ -222,7 +186,7 @@ STYLE:
       similarity: m.similarity,
     }));
 
-    // 6. Save chat log
+    // 6. SAVE CHAT LOG
     const { error: logError } = await supabase.from('chat_logs').insert([
       {
         session_id: String(sessionId),
@@ -244,6 +208,32 @@ STYLE:
       sources: matchedSources,
       sessionId,
     });
+  } catch (err) {
+    console.error('Server error:', err);
+    return res.status(500).json({ error: 'Something went wrong' });
+  }
+});
+
+app.get('/messages', async (req, res) => {
+  try {
+    const sessionId = req.query.sessionId;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId required' });
+    }
+
+    const { data, error } = await supabase
+      .from('chat_logs')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Fetch messages error:', error);
+      return res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+
+    return res.json({ messages: data });
   } catch (err) {
     console.error('Server error:', err);
     return res.status(500).json({ error: 'Something went wrong' });
