@@ -62,7 +62,22 @@ if (greetingMessages.includes(normalizedQuestion)) {
     sessionId,
   });
 }
+        
+        const { data: lastHuman } = await supabase
+  .from('chat_logs')
+  .select('sender')
+  .eq('session_id', sessionId)
+  .eq('sender', 'human')
+  .order('created_at', { ascending: false })
+  .limit(1);
 
+if (lastHuman && lastHuman.length > 0) {
+  return res.json({
+    answer: "A support agent has joined the chat. Please wait for a reply.",
+    sources: [],
+    sessionId,
+  });
+}
         const embeddingRes = await openai.embeddings.create({
             model: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
             input: question,
