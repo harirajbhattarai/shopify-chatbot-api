@@ -34,6 +34,34 @@ app.post('/chat', async (req, res) => {
         if (!question || typeof question !== 'string') {
             return res.status(400).json({ error: 'Message is required' });
         }
+        const normalizedQuestion = question.trim().toLowerCase();
+
+const greetingMessages = ['hi', 'hello', 'hey', 'hiya', 'good morning', 'good afternoon', 'good evening'];
+
+if (greetingMessages.includes(normalizedQuestion)) {
+  const answer = 'Hi! How can I help you today? You can ask about delivery, returns, warranty, or products.';
+
+  const { error: logError } = await supabase.from('chat_logs').insert([
+    {
+      session_id: String(sessionId),
+      user_message: question,
+      assistant_message: answer,
+      matched_sources: [],
+      confidence: 1.0,
+      escalated: false,
+    },
+  ]);
+
+  if (logError) {
+    console.error('Chat log insert error:', logError);
+  }
+
+  return res.json({
+    answer,
+    sources: [],
+    sessionId,
+  });
+}
 
         const embeddingRes = await openai.embeddings.create({
             model: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
