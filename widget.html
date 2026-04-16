@@ -163,7 +163,10 @@ if (!sessionId) {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ message, sessionId }),
+          body: JSON.stringify({ 
+            message: message,
+            sessionId: sessionId
+          }),
         });
 
         const data = await res.json();
