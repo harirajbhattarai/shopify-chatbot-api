@@ -11,103 +11,158 @@ app.use(cors());
 app.use(express.json());
 
 const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 app.get('/', (req, res) => {
-    res.json({ ok: true, message: 'Chatbot API is running' });
+  res.json({ ok: true, message: 'Chatbot API is running' });
 });
 
 app.post('/chat', async (req, res) => {
-    try {
-        const question = req.body.message;
-        const sessionId =
-            req.body.sessionId ||
-            req.headers['x-session-id'] ||
-            'anonymous-session';
+  try {
+    const question = req.body.message;
+    const sessionId =
+      req.body.sessionId ||
+      req.headers['x-session-id'] ||
+      'anonymous-session';
 
-        if (!question || typeof question !== 'string') {
-            return res.status(400).json({ error: 'Message is required' });
-        }
-        const normalizedQuestion = question.trim().toLowerCase();
+    console.log('NEW MESSAGE:', question);
+    console.log('SESSION ID:', sessionId);
 
-const greetingMessages = ['hi', 'hello', 'hey', 'hiya', 'good morning', 'good afternoon', 'good evening'];
+    if (!question || typeof question !== 'string') {
+      return res.status(400).json({ error: 'Message is required' });
+    }
 
-if (greetingMessages.includes(normalizedQuestion)) {
-  const answer = 'Hi! How can I help you today? You can ask about delivery, returns, warranty, or products.';
+    const normalizedQuestion = question.trim().toLowerCase();
 
-  const { error: logError } = await supabase.from('chat_logs').insert([
-    {
-      session_id: String(sessionId),
-      user_message: question,
-      assistant_message: answer,
-      matched_sources: [],
-      confidence: 1.0,
-      escalated: false,
-    },
-  ]);
+    const greetingMessages = [
+      'hi',
+      'hello',
+      'hey',
+      'hiya',
+      'good morning',
+      'good afternoon',
+      'good evening',
+    ];
 
-  if (logError) {
-    console.error('Chat log insert error:', logError);
-  }
+    // 1. Greeting handling
+    if (greetingMessages.includes(normalizedQuestion)) {
+      const answer =
+        'Hi! How can I help you today? You can ask about delivery, returns, warranty, or products.';
 
-  return res.json({
-    answer,
-    sources: [],
-    sessionId,
-  });
-}
-        
-        const { data: lastHuman } = await supabase
-  .from('chat_logs')
-  .select('sender')
-  .eq('session_id', sessionId)
-  .eq('sender', 'human')
-  .order('created_at', { ascending: false })
-  .limit(1);
+      const { error: logError } = await supabase.from('chat_logs').insert([
+        {
+          session_id: String(sessionId),
+          user_message: question,
+          assistant_message: answer,
+          matched_sources: [],
+          confidence: 1.0,
+          escalated: false,
+          sender: 'bot',
+        },
+      ]);
 
-if (lastHuman && lastHuman.length > 0) {
-  return res.json({
-    answer: "A support agent has joined the chat. Please wait for a reply.",
-    sources: [],
-    sessionId,
-  });
-}
-        const embeddingRes = await openai.embeddings.create({
-            model: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
-            input: question,
-        });
+      if (logError) {
+        console.error('Greeting log insert error:', logError);
+      }
 
-        const queryEmbedding = embeddingRes.data[0].embedding;
+      return res.json({
+        answer,
+        sources: [],
+        sessionId,
+      });
+    }
 
-        const { data: matches, error: matchError } = await supabase.rpc('match_documents', {
-            query_embedding: queryEmbedding,
-            match_count: 5,
-        });
+    // 2. Human takeover check
+    console.log('Checking for human takeover...');
 
-        if (matchError) {
-            console.error('Supabase search error:', matchError);
-            return res.status(500).json({ error: 'Search failed' });
-        }
+    const { data: lastHuman, error: lastHumanError } = await supabase
+      .from('chat_logs')
+      .select('sender, created_at')
+      .eq('session_id', sessionId)
+      .eq('sender', 'human')
+      .order('created_at', { ascending: false })
+      .limit(1);
 
-        const safeMatches = matches || [];
+    if (lastHumanError) {
+      console.error('Human takeover check error:', lastHumanError);
+    }
 
-        let answer = "I'm not sure based on the available store information. Please contact support for help.";
+    console.log('lastHuman result:', lastHuman);
 
-        if (safeMatches.length > 0) {
-            const context = safeMatches.map((m) => m.content).join('\n\n');
+    if (lastHuman && lastHuman.length > 0) {
+      console.log('TAKEOVER ACTIVE - returning support agent message');
 
-            const response = await openai.chat.completions.create({
-                model: process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini',
-                messages: [
-                    {
-                        role: 'system',
-                        content: `
+      const answer =
+        'A support agent has joined the chat. Please wait for a reply.';
+
+      const { error: logError } = await supabase.from('chat_logs').insert([
+        {
+          session_id: String(sessionId),
+          user_message: question,
+          assistant_message: answer,
+          matched_sources: [],
+          confidence: 1.0,
+          escalated: false,
+          sender: 'bot',
+        },
+      ]);
+
+      if (logError) {
+        console.error('Takeover log insert error:', logError);
+      }
+
+      return res.json({
+        answer,
+        sources: [],
+        sessionId,
+      });
+    }
+
+    console.log('No takeover found - continuing with AI flow');
+
+    // 3. Create embedding
+    const embeddingRes = await openai.embeddings.create({
+      model: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+      input: question,
+    });
+
+    const queryEmbedding = embeddingRes.data[0].embedding;
+
+    // 4. Search documents
+    const { data: matches, error: matchError } = await supabase.rpc(
+      'match_documents',
+      {
+        query_embedding: queryEmbedding,
+        match_count: 5,
+      }
+    );
+
+    if (matchError) {
+      console.error('Supabase search error:', matchError);
+      return res.status(500).json({ error: 'Search failed' });
+    }
+
+    const safeMatches = matches || [];
+
+    let answer =
+      "I'm not sure based on the available store information. Please contact support for help.";
+
+    // 5. Generate AI answer if context found
+    if (safeMatches.length > 0) {
+      const context = safeMatches.map((m) => m.content).join('\n\n');
+
+      const response = await openai.chat.completions.create({
+        model: process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `
 You are a professional customer support assistant for Hoverboard Store UK.
 
 STRICT RULES:
@@ -122,53 +177,55 @@ STYLE:
 - Include specific details like delivery time, refund timing, warranty limits, and dispatch rules
 - Keep answers short, practical, and customer-friendly
 `,
-                    },
-                    {
-                        role: 'user',
-                        content: `Context:\n${context}\n\nQuestion:\n${question}`,
-                    },
-                ],
-            });
+          },
+          {
+            role: 'user',
+            content: `Context:\n${context}\n\nQuestion:\n${question}`,
+          },
+        ],
+      });
 
-            answer =
-                response.choices?.[0]?.message?.content ||
-                "I'm not sure, please contact our support team.";
-        }
-
-        const matchedSources = safeMatches.map((m) => ({
-            title: m.title,
-            source_type: m.source_type,
-            source_id: m.source_id,
-            similarity: m.similarity,
-        }));
-
-        const { error: logError } = await supabase.from('chat_logs').insert([
-            {
-                session_id: String(sessionId),
-                user_message: question,
-                assistant_message: answer,
-                matched_sources: matchedSources,
-                confidence: safeMatches.length > 0 ? 0.9 : 0.2,
-                escalated: safeMatches.length === 0,
-            },
-        ]);
-
-        if (logError) {
-            console.error('Chat log insert error:', logError);
-        }
-
-        return res.json({
-            answer,
-            sources: matchedSources,
-            sessionId,
-        });
-    } catch (err) {
-        console.error('Server error:', err);
-        return res.status(500).json({ error: 'Something went wrong' });
+      answer =
+        response.choices?.[0]?.message?.content ||
+        "I'm not sure, please contact our support team.";
     }
+
+    const matchedSources = safeMatches.map((m) => ({
+      title: m.title,
+      source_type: m.source_type,
+      source_id: m.source_id,
+      similarity: m.similarity,
+    }));
+
+    // 6. Save chat log
+    const { error: logError } = await supabase.from('chat_logs').insert([
+      {
+        session_id: String(sessionId),
+        user_message: question,
+        assistant_message: answer,
+        matched_sources: matchedSources,
+        confidence: safeMatches.length > 0 ? 0.9 : 0.2,
+        escalated: safeMatches.length === 0,
+        sender: 'bot',
+      },
+    ]);
+
+    if (logError) {
+      console.error('Chat log insert error:', logError);
+    }
+
+    return res.json({
+      answer,
+      sources: matchedSources,
+      sessionId,
+    });
+  } catch (err) {
+    console.error('Server error:', err);
+    return res.status(500).json({ error: 'Something went wrong' });
+  }
 });
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-    console.log(`Chatbot API running on port ${PORT}`);
+  console.log(`Chatbot API running on port ${PORT}`);
 });
